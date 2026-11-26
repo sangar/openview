@@ -115,7 +115,7 @@ static const Column COLUMNS[SORT_COUNT] = {
     [SORT_CONNECTIONS] = { "conns", 8, true }, [SORT_CONTAINER] = { "container", 18, false },
 };
 
-typedef enum Confirm { CONFIRM_NONE, CONFIRM_TERM, CONFIRM_KILL, CONFIRM_GROUP } Confirm;
+typedef enum Confirm { CONFIRM_NONE, CONFIRM_TERM, CONFIRM_KILL } Confirm;
 
 // Target is the listener a confirmation is about, copied so that a refresh
 // while the question is open cannot change it.
@@ -407,8 +407,8 @@ static void draw_row(App *app, Screen *screen, int y, const Listener *listener)
 static void draw_hints(App *app, Screen *screen, Rect rect)
 {
     static const char *const HINTS[][2] = {
-        { "k", "term" },  { "K", "kill" }, { "g", "group" }, { "enter", "inspect" }, { "/", "filter" },
-        { "u", "udp" },   { "←→", "sort" }, { "?", "help" },  { "q", "quit" },
+        { "x", "stop" }, { "X", "kill" }, { "enter", "inspect" }, { "/", "filter" },
+        { "u", "udp" },  { "←→", "sort" }, { "?", "help" },      { "q", "quit" },
     };
     const Theme *theme = app->theme;
     int y = rect.y + rect.height - 1;
@@ -568,8 +568,6 @@ static String confirm_question(const App *app, Arena *arena)
         return str_format(arena, "Send SIGTERM to %s (%d)?", target->name, target->pid);
     case CONFIRM_KILL:
         return str_format(arena, "Send SIGKILL to %s (%d)?", target->name, target->pid);
-    case CONFIRM_GROUP:
-        return str_format(arena, "Send SIGTERM to the group of %s (%d)?", target->name, target->group_id);
     case CONFIRM_NONE:
         break;
     }
@@ -579,13 +577,17 @@ static String confirm_question(const App *app, Arena *arena)
 static void draw_confirm(App *app, Screen *screen)
 {
     String question = confirm_question(app, app->data);
-    Rect rect = centered(screen, (int)utf8_width(question) + 6, 5);
+    Rect rect = centered(screen, (int)utf8_width(question) + 30, 5);
     draw_dialog(app, screen, rect, app->confirm == CONFIRM_KILL ? S("kill") : S("terminate"), S(""));
     Rect inner = rect_inner(rect);
     screen_text(screen, inner.x + 2, inner.y, inner.width - 2, question, app->theme->title, ATTR_BOLD);
     int x = inner.x + 2;
     x += screen_text(screen, x, inner.y + 2, inner.width, S("y"), app->theme->key, ATTR_BOLD);
     x += screen_text(screen, x, inner.y + 2, inner.width, S(" yes   "), app->theme->muted, 0);
+    if (app->confirm == CONFIRM_TERM) {
+        x += screen_text(screen, x, inner.y + 2, inner.width, S("g"), app->theme->key, ATTR_BOLD);
+        x += screen_text(screen, x, inner.y + 2, inner.width, S(" its process group   "), app->theme->muted, 0);
+    }
     x += screen_text(screen, x, inner.y + 2, inner.width, S("n"), app->theme->key, ATTR_BOLD);
     screen_text(screen, x, inner.y + 2, inner.width, S(" no"), app->theme->muted, 0);
 }
@@ -593,21 +595,20 @@ static void draw_confirm(App *app, Screen *screen)
 static void draw_help(App *app, Screen *screen)
 {
     static const char *const KEYS[][2] = {
-        { "↑ ↓ pgup pgdn", "move" },
-        { "home end", "first, last" },
+        { "↑ ↓  j k  pgup pgdn", "move" },
+        { "home end  g G", "first, last" },
         { "click, wheel", "select, scroll" },
         { "enter", "inspect the process" },
         { "esc", "close, clear the filter" },
-        { "k", "send SIGTERM" },
-        { "K", "send SIGKILL" },
-        { "g", "send SIGTERM to the process group" },
+        { "x", "send SIGTERM, after asking; g there signals the group" },
+        { "X", "send SIGKILL, after asking" },
         { "/", "filter" },
         { "← →  click header", "sort by column" },
-        { "r", "reverse the sort" },
+        { "R", "reverse the sort" },
         { "u", "show UDP too" },
         { "q  ctrl-c", "quit" },
     };
-    Rect rect = centered(screen, 64, (int)countof(KEYS) + 4);
+    Rect rect = centered(screen, 76, (int)countof(KEYS) + 4);
     draw_dialog(app, screen, rect, S("help"), S("any key closes"));
     Rect inner = rect_inner(rect);
     for (size_t i = 0; i < countof(KEYS) && (int)i < inner.height - 1; i++) {
@@ -694,11 +695,6 @@ static void ask(App *app, Confirm confirm)
                    str_format(app->data, "ov cannot read the process on port %d; try sudo ov", listener->port));
         return;
     }
-    if (confirm == CONFIRM_GROUP && listener->group_id == app->group_id) {
-        set_status(app, true, str_format(app->data, "%.*s is in ov's own process group", (int)listener->name.len,
-                                         listener->name.data));
-        return;
-    }
     app->target = (Target) { .pid = listener->pid, .group_id = listener->group_id, .port = listener->port };
     size_t len = listener->name.len < NAME_MAX - 1 ? listener->name.len : NAME_MAX - 1;
     memcpy(app->target.name, listener->name.data, len);
@@ -720,9 +716,14 @@ static bool still_listening(const App *app, const Target *target)
     return false;
 }
 
-static void send_confirmed(App *app)
+static void send_confirmed(App *app, bool group)
 {
     const Target *target = &app->target;
+    if (group && target->group_id == app->group_id) {
+        set_status(app, true, str_format(app->data, "%s is in ov's own process group; nothing sent", target->name));
+        app->confirm = CONFIRM_NONE;
+        return;
+    }
     refresh(app);
     if (!still_listening(app, target)) {
         set_status(app, true, str_format(app->data, "%s (%d) no longer holds port %d; nothing sent", target->name,
@@ -731,7 +732,6 @@ static void send_confirmed(App *app)
         return;
     }
     Signal signal = app->confirm == CONFIRM_KILL ? SIGNAL_KILL : SIGNAL_STOP;
-    bool group = app->confirm == CONFIRM_GROUP;
     Listener listener = { .pid = target->pid, .group_id = target->group_id, .name = S(target->name) };
     Err err = { 0 };
     if (signal_listener(app->data, &listener, signal, group, &err) != ERR_OK) {
@@ -827,8 +827,9 @@ static void handle_key(App *app, Event event)
     }
     if (app->confirm != CONFIRM_NONE) {
         bool yes = event.key == KEY_ENTER || (event.key == KEY_CHAR && (event.codepoint == 'y' || event.codepoint == 'Y'));
-        if (yes) {
-            send_confirmed(app);
+        bool group = app->confirm == CONFIRM_TERM && event.key == KEY_CHAR && event.codepoint == 'g';
+        if (yes || group) {
+            send_confirmed(app, group);
         } else if (event.key != KEY_MOUSE) {
             app->confirm = CONFIRM_NONE;
         }
@@ -893,21 +894,30 @@ static void handle_key(App *app, Event event)
     case '?':
         app->help = true;
         return;
-    case 'r':
+    case 'j':
+        move_cursor(app, 1);
+        return;
+    case 'k':
+        move_cursor(app, -1);
+        return;
+    case 'g':
+        app->cursor = 0;
+        return;
+    case 'G':
+        move_cursor(app, (int64_t)app->row_count);
+        return;
+    case 'R':
         sort_by(app, app->sort);
         return;
     case 'u':
         app->include_udp = !app->include_udp;
         refresh(app);
         return;
-    case 'k':
+    case 'x':
         ask(app, CONFIRM_TERM);
         return;
-    case 'K':
+    case 'X':
         ask(app, CONFIRM_KILL);
-        return;
-    case 'g':
-        ask(app, CONFIRM_GROUP);
         return;
     default:
         return;

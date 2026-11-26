@@ -13,9 +13,11 @@ ov free                                  print an unused port
 -u, --udp   include UDP sockets
 ```
 
-In the screen view: `↑`/`↓` select, `enter` inspects the process, `k`, `K`
-and `g` send SIGTERM, SIGKILL and SIGTERM to the group after asking, `/`
-filters, `←`/`→` and `r` sort, `u` shows UDP, `?` lists every key, `q` quits.
+In the screen view: `↑`/`↓` or `j`/`k` select, `g`/`G` jump to the first and
+last, `enter` inspects the process, `x` and `X` send SIGTERM and SIGKILL after
+asking (`g` in the question signals the process group), `/` filters, `←`/`→`
+and `R` sort, `u` shows UDP, `?` lists every key, `q` quits. The keys match
+initctl's.
 Addresses reachable from the network are amber, loopback blue. Ports that
 Docker containers publish show the container's name.
 
