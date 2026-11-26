@@ -13,6 +13,8 @@ ov free                                  print an unused port
 -u, --udp   include UDP sockets
 ```
 
+![ov listing nginx, node, postgres and redis-server listeners, with their addresses, users and connections](docs/screenshot.png)
+
 In the screen view: `↑`/`↓` or `j`/`k` select, `g`/`G` jump to the first and
 last, `enter` inspects the process, `x` and `X` send SIGTERM and SIGKILL after
 asking (`g` in the question signals the process group), `/` filters, `←`/`→`
